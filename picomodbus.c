@@ -3,6 +3,7 @@
 
   Part of grblHAL
 
+  Copyright (c) 2023 Expatria Technologies Inc.
   Copyright (c) 2025 Terje Io
   Copyright (c) 2025 Mitchell Grams
 
