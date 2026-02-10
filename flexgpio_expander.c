@@ -1,0 +1,437 @@
+/*
+
+flexgpio_expander.c - driver code for FLEXGPIO I2C expander
+
+  Part of grblHAL
+
+  Copyright (c) 2018-2026 Terje Io
+
+  grblHAL is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  grblHAL is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
+
+*/
+
+// TODO: 
+//- (1) ADD WRITING FOR CONFIGURATION (INVERT, DIRECTION, MASK, ETC.)
+//- (2) CLAIM INPUT TO USE FOR TRIGGERING IRQ FOR ALARM PINS
+
+#include "driver.h"
+
+#if FLEXGPIO_ENABLE == 1
+
+#include <stdio.h>
+#include <math.h>
+
+#include "grbl/task.h"
+#include "grbl/protocol.h"
+#include "grbl/utf8.h"
+
+#ifndef FLEXGPIO_ADDRESS
+#define FLEXGPIO_ADDRESS (0x48)
+#endif
+
+#define FLEXGPIO_N_DIN   6
+#define FLEXGPIO_N_DOUT   32
+
+static struct {
+    pin_irq_mode_t mode;
+    ioport_interrupt_callback_ptr callback;
+} irq[FLEXGPIO_N_DIN] = {};
+
+static xbar_t aux_in[FLEXGPIO_N_DIN] = {};
+static xbar_t aux_out[FLEXGPIO_N_DOUT] = {};
+static io_ports_data_t digital;
+static uint32_t d_out = 0, d_in = 0;
+static bool reset_pending = false; //NEED TO IMPLEMENT PROPERLY
+static volatile uint32_t event_bits = 0; //NEED TO IMPLEMENT PROPERLY
+
+static driver_reset_ptr driver_reset;
+static enumerate_pins_ptr on_enumerate_pins;
+static on_report_options_ptr on_report_options;
+
+static void digital_out_ll (xbar_t *output, float value)
+{
+    static uint32_t last_out = 0;
+
+    bool on = value !=0.0f;
+
+    if(aux_out[output->id].mode.inverted)
+        on = !on;
+
+    if(on)
+        *(uint32_t *)output->port |= (1 << output->pin);
+    else
+        *(uint32_t *)output->port &= ~(1 << output->pin);
+
+    if(last_out != *(uint32_t *)output->port) {
+        last_out = *(uint32_t *)output->port;
+
+        uint8_t cmd[4];
+
+        // Split 32-bit mask into individual bytes
+        cmd[0] = last_out & 0xFF;         // Least significant byte
+        cmd[1] = (last_out >> 8) & 0xFF;  // Second byte
+        cmd[2] = (last_out >> 16) & 0xFF; // Third byte
+        cmd[3] = (last_out >> 24) & 0xFF; // Most significant byte
+
+        while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
+            hal.delay_ms(1, NULL);
+    }
+}
+
+static bool digital_out_cfg (xbar_t *output, gpio_out_config_t *config, bool persistent)
+{
+    if(output->id == 1) {
+
+        if(config->inverted != aux_out[output->id].mode.inverted) {
+            aux_out[output->id].mode.inverted = config->inverted;
+            digital_out_ll(output, (float)(!(*(uint32_t *)output->port & (1 << output->pin)) ^ config->inverted));        }
+        // Open drain not supported
+
+        if(persistent)
+            ioport_save_output_settings(output, config);
+    }
+
+    return output->id < digital.out.n_ports;
+}
+
+static void digital_out (uint8_t port, bool on)
+{
+    if(port < digital.out.n_ports)
+        digital_out_ll(&aux_out[port], (float)on);
+}
+
+static float digital_out_state (xbar_t *output)
+{
+    float value = -1.0f;
+
+    if(output->id < digital.out.n_ports)
+        value = (float)(!!(*(uint16_t *)output->port & (1 << output->pin)));
+
+    return value;
+}
+
+
+static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persistent)
+{
+    if(input->id < digital.in.n_ports && config->pull_mode != PullMode_UpDown) {
+
+        if(!xbar_is_probe_in(input->function))
+            aux_in[input->id].mode.inverted = config->inverted;
+
+        if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
+
+            //char buf[40];
+
+            //aux_in[input->id].mode.pull_mode = config->pull_mode;
+            //sprintf(buf, "[EXP:io.%d=in,high,%s]\n", input->pin, config->pull_mode == PullMode_Down ? "pd" : "pu");
+            //expander.write(buf);
+        }
+
+        if(persistent)
+            ioport_save_input_settings(input, config);
+    }
+
+    return input->id < digital.in.n_ports;
+}
+
+static float digital_in_state (xbar_t *input)
+{
+    float value = -1.0f;
+
+    if(input->id < digital.in.n_ports)
+        value = (float)(((*(uint32_t *)input->port & (1 << input->pin)) != 0) ^ aux_in[input->id].mode.inverted);
+
+    return value;
+}
+
+inline static __attribute__((always_inline)) int32_t get_input (const xbar_t *input, wait_mode_t wait_mode, float timeout)
+{
+    if(wait_mode == WaitMode_Immediate)
+        return !!(*(uint32_t *)input->port & (1 << input->pin)) ^ input->mode.inverted;
+
+    int32_t value = -1;
+    uint32_t mask = 1 << input->pin;
+    uint_fast16_t delay = (uint_fast16_t)ceilf((1000.0f / 50.0f) * timeout) + 1;
+
+    if(wait_mode == WaitMode_Rise || wait_mode == WaitMode_Fall) {
+
+        pin_irq_mode_t mode = wait_mode == WaitMode_Rise ? IRQ_Mode_Rising : IRQ_Mode_Falling;
+
+        if(input->cap.irq_mode & mode) {
+
+            event_bits &= ~mask;
+            irq[input->id].mode = mode;
+
+            do {
+                if(event_bits & mask) {
+                    value = !!(*(uint32_t *)input->port & mask) ^ input->mode.inverted;
+                    break;
+                }
+                if(delay) {
+                    protocol_execute_realtime();
+                    hal.delay_ms(50, NULL);
+                } else
+                    break;
+            } while(--delay && !sys.abort);
+
+            irq[input->id].mode = input->mode.irq_mode;    // Restore pin interrupt status
+        }
+
+    } else {
+
+        bool wait_for = wait_mode != WaitMode_Low;
+
+        do {
+            if((!!(*(uint32_t *)input->port & mask) ^ input->mode.inverted) == wait_for) {
+                value = wait_for;
+                break;
+            }
+            if(delay) {
+                protocol_execute_realtime();
+                hal.delay_ms(50, NULL);
+            } else
+                break;
+        } while(--delay && !sys.abort);
+    }
+
+    return value;
+}
+
+static int32_t wait_on_input (uint8_t port, wait_mode_t wait_mode, float timeout)
+{
+    int32_t value = -1;
+
+    if(port < digital.in.n_ports)
+        value = get_input(&aux_in[port], wait_mode, timeout);
+
+    return value;
+}
+
+static bool register_interrupt_handler (uint8_t port, uint8_t user_port, pin_irq_mode_t irq_mode, ioport_interrupt_callback_ptr interrupt_callback)
+{
+    bool ok;
+
+    if((ok = port < digital.in.n_ports && aux_in[port].cap.irq_mode != IRQ_Mode_None)) {
+
+        xbar_t *input = &aux_in[port];
+
+        if((ok = (irq_mode & input->cap.irq_mode) == irq_mode && interrupt_callback != NULL)) {
+            irq[input->id].callback = interrupt_callback;
+            irq[input->id].mode = input->mode.irq_mode = irq_mode;
+        }
+
+        if(irq_mode == IRQ_Mode_None || !ok) {
+            irq[input->id].callback = NULL;
+            irq[input->id].mode = input->mode.irq_mode = IRQ_Mode_None;
+        }
+    }
+
+    return ok;
+}
+
+static bool set_pin_function (xbar_t *port, pin_function_t function)
+{
+    if(port->mode.input)
+        aux_in[port->id].id = function;
+    else
+        aux_out[port->id].id = function;
+
+    return true;
+}
+
+static void set_pin_description (io_port_direction_t dir, uint8_t port, const char *description)
+{
+    if(dir == Port_Input && port < digital.in.n_ports)
+        aux_in[port].description = description;
+    else if(dir == Port_Output && port < digital.out.n_ports)
+        aux_out[port].description = description;
+}
+
+static xbar_t *get_pin_info (io_port_direction_t dir, uint8_t port)
+{
+    static xbar_t pin;
+
+    xbar_t *info = NULL;
+
+    if(dir == Port_Input && port < digital.in.n_ports) {
+        memcpy(&pin, &aux_in[port], sizeof(xbar_t));
+        pin.get_value = digital_in_state;
+        pin.set_function = set_pin_function;
+        pin.config = digital_in_cfg;
+        info = &pin;
+    } else if(dir == Port_Output && port < digital.out.n_ports) {
+        memcpy(&pin, &aux_out[port], sizeof(xbar_t));
+        pin.get_value = digital_out_state;
+        pin.set_value = digital_out_ll;
+        pin.set_function = set_pin_function;
+        pin.config = digital_out_cfg;
+        info = &pin;
+    }
+
+    return info;
+}
+
+static void get_aux_out_max (xbar_t *pin, void *fn)
+{
+    if(pin->group == PinGroup_AuxOutput)
+        *(pin_function_t *)fn = max(*(pin_function_t *)fn, pin->function + 1);
+}
+
+static void get_aux_in_max (xbar_t *pin, void *fn)
+{
+    if(pin->group == PinGroup_AuxInput)
+        *(pin_function_t *)fn = max(*(pin_function_t *)fn, pin->function + 1);
+}
+
+static void flexgpio_config (void *data)
+{
+    uint8_t cmd[16];
+    // Split 32-bit mask into individual bytes
+    // cmd[0] = flexgpio_outpins & 0xFF;         // Least significant byte
+    // cmd[1] = (flexgpio_outpins >> 8) & 0xFF;  // Second byte
+    // cmd[2] = (flexgpio_outpins >> 16) & 0xFF; // Third byte
+    // cmd[3] = (flexgpio_outpins >> 24) & 0xFF; // Most significant byte
+
+    // cmd[4] = flexgpio_direction_mask & 0xFF;         // Least significant byte
+    // cmd[5] = (flexgpio_direction_mask >> 8) & 0xFF;  // Second byte
+    // cmd[6] = (flexgpio_direction_mask >> 16) & 0xFF; // Third byte
+    // cmd[7] = (flexgpio_direction_mask >> 24) & 0xFF; // Most significant byte
+    
+    // cmd[8] = flexgpio_polarity_mask & 0xFF;         // Least significant byte
+    // cmd[9] = (flexgpio_polarity_mask >> 8) & 0xFF;  // Second byte
+    // cmd[10] = (flexgpio_polarity_mask >> 16) & 0xFF; // Third byte
+    // cmd[11] = (flexgpio_polarity_mask >> 24) & 0xFF; // Most significant byte
+    
+    // cmd[12] = flexgpio_enable_mask & 0xFF;         // Least significant byte
+    // cmd[13] = (flexgpio_enable_mask >> 8) & 0xFF;  // Second byte
+    // cmd[14] = (flexgpio_enable_mask >> 16) & 0xFF; // Third byte
+    // cmd[15] = (flexgpio_enable_mask >> 24) & 0xFF; // Most significant byte
+
+    while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
+        hal.delay_ms(1, NULL);
+    }
+}
+
+static void driverReset (void)
+{
+    driver_reset();
+
+    if(reset_pending)
+    	task_add_immediate(flexgpio_config, NULL);
+}
+
+
+static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
+{
+    static xbar_t pin = {};
+
+    on_enumerate_pins(low_level, pin_info, data);
+
+    uint_fast8_t idx;
+
+    for(idx = 0; idx < digital.in.n_ports; idx ++) {
+
+        memcpy(&pin, &aux_in[idx], sizeof(xbar_t));
+
+        if(!low_level)
+            pin.port = "FLEXGPIO:";
+
+        pin_info(&pin, data);
+    }
+
+    for(idx = 0; idx < digital.out.n_ports; idx ++) {
+
+        memcpy(&pin, &aux_out[idx], sizeof(xbar_t));
+
+        if(!low_level)
+            pin.port = "FLEXGPIO:";
+
+        pin_info(&pin, data);
+    }
+}
+
+static void onReportOptions (bool newopt)
+{
+    on_report_options(newopt);
+
+    if(!newopt)
+        report_plugin("FLEXGPIO", "0.02");
+}
+
+void flexgpio_init (void)
+{
+    uint_fast8_t idx;
+    pin_function_t aux_in_base = Input_Aux0, aux_out_base = Output_Aux0;
+
+    io_digital_t dports = {
+        .ports = &digital,
+        .digital_out = digital_out,
+        .get_pin_info = get_pin_info,
+        .wait_on_input = wait_on_input,
+        .set_pin_description = set_pin_description,
+        .register_interrupt_handler = register_interrupt_handler
+    };
+
+    on_report_options = grbl.on_report_options;
+    grbl.on_report_options = onReportOptions;
+
+
+    if(i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
+
+        driver_reset = hal.driver_reset;
+        hal.driver_reset = driverReset;
+
+        hal.enumerate_pins(false, get_aux_in_max, &aux_in_base);
+        hal.enumerate_pins(false, get_aux_out_max, &aux_out_base);
+
+        digital.in.n_ports = max(FLEXGPIO_N_DIN, N_AUX_DIN_MAX - aux_in_base);
+
+        for(idx = 0; idx < digital.in.n_ports; idx++) {
+            aux_in[idx].id = idx;
+            aux_in[idx].pin = idx;
+            aux_in[idx].port = &d_in;
+            aux_in[idx].function = aux_in_base + idx;
+            aux_in[idx].group = PinGroup_AuxInput;
+            aux_in[idx].cap.input = On;
+            aux_in[idx].cap.irq_mode = IRQ_Mode_Edges;
+            aux_in[idx].cap.pull_mode = PullMode_UpDown;
+            aux_in[idx].cap.external = On;
+            aux_in[idx].cap.claimable = On;
+            aux_in[idx].mode.input = On;
+        }
+
+        digital.out.n_ports = max(FLEXGPIO_N_DOUT, N_AUX_DOUT_MAX - aux_out_base);
+
+        for(idx = 0; idx < digital.out.n_ports; idx++) {
+            aux_out[idx].id = idx;
+            aux_out[idx].pin = idx + 8; //why + 8 ?
+            aux_out[idx].port = &d_out;
+            aux_out[idx].function = aux_out_base + idx;
+            aux_out[idx].group = PinGroup_AuxOutput;
+            aux_out[idx].cap.output = On;
+            aux_out[idx].cap.external = On;
+            aux_out[idx].cap.claimable = On;
+            aux_out[idx].mode.output = On;
+        }
+
+        ioports_add_digital(&dports);
+
+        on_enumerate_pins = hal.enumerate_pins;
+        hal.enumerate_pins = onEnumeratePins;
+
+        task_run_on_startup(flexgpio_config, NULL);
+    }
+}
+
+#endif // FLEXGPIO_ENABLE
