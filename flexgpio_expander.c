@@ -41,7 +41,7 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 #endif
 
 #define FLEXGPIO_N_DIN    2
-#define FLEXGPIO_N_DOUT   32
+#define FLEXGPIO_N_DOUT   29
 
 static struct {
     pin_irq_mode_t mode;
@@ -378,7 +378,7 @@ static void complete_setup (void *data)
     grbl.on_report_options = onReportOptions;
 
     driver_reset = hal.driver_reset;
-    hal.driver_reset = OnReset;
+    hal.driver_reset = driverReset;
 
     task_add_immediate(flexgpio_config, NULL);
 }
@@ -422,7 +422,7 @@ void flexgpio_init (void)
 
         for(idx = 0; idx < digital.out.n_ports; idx++) {
             aux_out[idx].id = idx;
-            aux_out[idx].pin = idx + 10; //why + 8 ?
+            aux_out[idx].pin = idx + 11; //why + 8 ?
             aux_out[idx].port = &d_out;
             aux_out[idx].function = aux_out_base + idx;
             aux_out[idx].group = PinGroup_AuxOutput;
