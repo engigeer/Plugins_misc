@@ -40,7 +40,7 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 #define FLEXGPIO_ADDRESS (0x48)
 #endif
 
-#define FLEXGPIO_N_DIN   6
+#define FLEXGPIO_N_DIN    2
 #define FLEXGPIO_N_DOUT   32
 
 static struct {
@@ -84,8 +84,8 @@ static void digital_out_ll (xbar_t *output, float value)
         cmd[2] = (last_out >> 16) & 0xFF; // Third byte
         cmd[3] = (last_out >> 24) & 0xFF; // Most significant byte
 
-        while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
-            hal.delay_ms(1, NULL);
+        // while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
+        //     hal.delay_ms(1, NULL);
     }
 }
 
@@ -318,9 +318,9 @@ static void flexgpio_config (void *data)
     // cmd[14] = (flexgpio_enable_mask >> 16) & 0xFF; // Third byte
     // cmd[15] = (flexgpio_enable_mask >> 24) & 0xFF; // Most significant byte
 
-    while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
-        hal.delay_ms(1, NULL);
-    }
+    // while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
+    //     hal.delay_ms(1, NULL);
+    // }
 }
 
 static void driverReset (void)
@@ -369,6 +369,20 @@ static void onReportOptions (bool newopt)
         report_plugin("FLEXGPIO", "0.02");
 }
 
+static void complete_setup (void *data)
+{
+    on_enumerate_pins = hal.enumerate_pins;
+    hal.enumerate_pins = onEnumeratePins;
+
+    on_report_options = grbl.on_report_options;
+    grbl.on_report_options = onReportOptions;
+
+    driver_reset = hal.driver_reset;
+    hal.driver_reset = OnReset;
+
+    task_add_immediate(flexgpio_config, NULL);
+}
+
 void flexgpio_init (void)
 {
     uint_fast8_t idx;
@@ -383,14 +397,7 @@ void flexgpio_init (void)
         .register_interrupt_handler = register_interrupt_handler
     };
 
-    on_report_options = grbl.on_report_options;
-    grbl.on_report_options = onReportOptions;
-
-
-    if(i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
-
-        driver_reset = hal.driver_reset;
-        hal.driver_reset = driverReset;
+    if(1) {//i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
 
         hal.enumerate_pins(false, get_aux_in_max, &aux_in_base);
         hal.enumerate_pins(false, get_aux_out_max, &aux_out_base);
@@ -415,7 +422,7 @@ void flexgpio_init (void)
 
         for(idx = 0; idx < digital.out.n_ports; idx++) {
             aux_out[idx].id = idx;
-            aux_out[idx].pin = idx + 8; //why + 8 ?
+            aux_out[idx].pin = idx + 10; //why + 8 ?
             aux_out[idx].port = &d_out;
             aux_out[idx].function = aux_out_base + idx;
             aux_out[idx].group = PinGroup_AuxOutput;
@@ -427,10 +434,7 @@ void flexgpio_init (void)
 
         ioports_add_digital(&dports);
 
-        on_enumerate_pins = hal.enumerate_pins;
-        hal.enumerate_pins = onEnumeratePins;
-
-        task_run_on_startup(flexgpio_config, NULL);
+        task_run_on_startup(complete_setup, NULL);
     }
 }
 
