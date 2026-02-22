@@ -316,6 +316,11 @@ static xbar_t *get_pin_info (io_port_direction_t dir, uint8_t port)
     return info;
 }
 
+ISR_CODE static void ISR_FUNC(flexgpio_response)(uint8_t port, bool state)
+{
+    // request info from expander and react accordingly
+}
+
 static void get_aux_out_max (xbar_t *pin, void *fn)
 {
     if(pin->group == PinGroup_AuxOutput)
@@ -433,6 +438,20 @@ void flexgpio_init (void)
 
     on_report_options = grbl.on_report_options;
     grbl.on_report_options = onReportOptions;
+
+    #if FLEXGPIO_IRQ_PIN
+
+        uint8_t expander_irq_port = FLEXGPIO_IRQ_PIN;
+        io_port_cfg_t mcu_d_in;
+        xbar_t *portinfo;
+
+        if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_RisingFalling })))
+            ioport_enable_irq(expander_irq_port, portinfo->mode.inverted ? IRQ_Mode_Rising : IRQ_Mode_Falling, flexgpio_response)
+        else
+            task_run_on_startup(report_warning, "FlexGPIO plugin failed to claim port for MCU IRQ!");
+        }
+
+    #endif // FLEXGPIO_IRQ_PIN
 
     if(1) {//i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
 
