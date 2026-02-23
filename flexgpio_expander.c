@@ -70,7 +70,7 @@ uint8_t flexgpio_out_map[] = {
 };
 
 #define FLEXGPIO_N_DIN    0
-#define FLEXGPIO_N_DOUT  (sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
+#define FLEXGPIO_N_DOUT  16//(sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
 
 static struct {
     pin_irq_mode_t mode;
@@ -120,7 +120,7 @@ static void digital_out_ll (xbar_t *output, float value)
 
 static bool digital_out_cfg (xbar_t *output, gpio_out_config_t *config, bool persistent)
 {
-    if(output->id == 1) { //WHY THIS? NEED TO CHECK IF THIS IS BLOCKING INVERSION FOR MOST PINS
+    if(output->id < digital.out.n_ports) { //WHY THIS? NEED TO CHECK IF THIS IS BLOCKING INVERSION FOR MOST PINS
 
         if(config->inverted != aux_out[output->id].mode.inverted) {
             aux_out[output->id].mode.inverted = config->inverted;
@@ -332,6 +332,7 @@ static void get_aux_in_max (xbar_t *pin, void *fn)
 
 static void flexgpio_config (void *data)
 {
+    // TODO : remove unncessary info
     uint8_t cmd[16];
     //VALUE
     cmd[0] = 0x00;  // Least significant byte
@@ -344,8 +345,8 @@ static void flexgpio_config (void *data)
     cmd[6] = 0x00;  // Third byte
     cmd[7] = 0x00;  // Most significant byte
     //POLARITY
-    cmd[8] = 0x00;  // Least significant byte
-    cmd[9] = 0x00;  // Second byte
+    cmd[8] = 0x00;   // Least significant byte
+    cmd[9] = 0x00;   // Second byte
     cmd[10] = 0x00;  // Third byte
     cmd[11] = 0x00;  // Most significant byte
     //ENABLE
@@ -389,6 +390,8 @@ static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
     for(idx = 0; idx < digital.out.n_ports; idx ++) {
 
         memcpy(&pin, &aux_out[idx], sizeof(xbar_t));
+
+        //pin.pin += 8; WHAT IS THIS DOING FOR THE FNC PLUGIN?
 
         if(!low_level)
             pin.port = "FLEXGPIO:";
