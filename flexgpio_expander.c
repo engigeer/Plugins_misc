@@ -40,42 +40,37 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 #define FLEXGPIO_ADDRESS (0x48)
 #endif
 
-#define FLEXGPIO_N_DIN    0
-#define FLEXGPIO_N_DOUT   30
-#define FLEXGPIO_N_ACTIVE 18 // determine from count of map?
+uint8_t flexgpio_out_map[] = {
+    23 // AUXOUT_0
+    ,22 // AUXOUT_1
+    ,21 // AUXOUT_2
+    ,20 // AUXOUT_3
+    ,19 // AUXOUT_4
+    ,18 // AUXOUT_5
+    ,17 // AUXOUT_6
+    ,16 // AUXOUT_7
 
-uint8_t flexgpio_out_map[FLEXGPIO_N_DOUT] = {
-    0, // GPIO 0  (SDA)
-    0, // GPIO 1  (SCL)
-    0, // GPIO 2  (MCU_IRQ)
-    0, // GPIO 3  (TOOL)
-    0, // GPIO 4  (PROBE)
-    0, // GPIO 5  (ALARM_X)
-    0, // GPIO 6  (ALARM_Y)
-    0, // GPIO 7  (ALARM_Z)
-    0, // GPIO 8  (ALARM_A)
-    0, // GPIO 9  (ALARM_B)
-    0, // GPIO 10 (ALARM_C)
-    1, // GPIO 11 (SPINDLE_EN)
-    1, // GPIO 12 (SPINDLE_DIR)
-    1, // GPIO 13 (MIST)
-    1, // GPIO 14 (COOLANT)
-    0, // GPIO 15 (PROBE_MCU)
-    1, // GPIO 16 (AUXOUT_7)
-    1, // GPIO 17 (AUXOUT_6)
-    1, // GPIO 18 (AUXOUT_5)
-    1, // GPIO 19 (AUXOUT_4)
-    1, // GPIO 20 (AUXOUT_3)
-    1, // GPIO 21 (AUXOUT_2)
-    1, // GPIO 22 (AUXOUT_1)
-    1, // GPIO 23 (AUXOUT_0)
-    1, // GPIO 24 (DISABLE_C_N)
-    1, // GPIO 25 (DISABLE_B_N)
-    1, // GPIO 26 (DISABLE_A_N)
-    1, // GPIO 27 (DISABLE_Z_N)
-    1, // GPIO 28 (DISABLE_Y_N)
-    1  // GPIO 29 (DISABLE_X_N)
+    ,11 // SPINDLE_EN
+    ,12 // SPINDLE_DIR
+    ,13 // MIST
+    ,14 // COOLANT
+
+    ,29  // DISABLE_X_N
+    ,28  // DISABLE_Y_N
+    ,27  // DISABLE_Z_N
+#if N_ABC_MOTORS > 0
+    ,26  // DISABLE_A_N
+#endif
+#if N_ABC_MOTORS >= 2
+    ,25  // DISABLE_B_N
+#endif
+#if N_ABC_MOTORS == 3
+    ,24  // DISABLE_C_N
+#endif
 };
+
+#define FLEXGPIO_N_DIN    0
+#define FLEXGPIO_N_DOUT  (sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
 
 static struct {
     pin_irq_mode_t mode;
@@ -83,7 +78,7 @@ static struct {
 } irq[FLEXGPIO_N_DIN] = {};
 
 static xbar_t aux_in[FLEXGPIO_N_DIN] = {};
-static xbar_t aux_out[FLEXGPIO_N_ACTIVE] = {};
+static xbar_t aux_out[FLEXGPIO_N_DOUT] = {};
 static io_ports_data_t digital;
 static uint32_t d_out = 0, d_in = 0;
 static bool reset_pending = false; //NEED TO IMPLEMENT PROPERLY
@@ -118,14 +113,14 @@ static void digital_out_ll (xbar_t *output, float value)
         cmd[2] = (last_out >> 16) & 0xFF; // Third byte
         cmd[3] = (last_out >> 24) & 0xFF; // Most significant byte
 
-        // while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
-        //     hal.delay_ms(1, NULL);
+        while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
+            hal.delay_ms(1, NULL);
     }
 }
 
 static bool digital_out_cfg (xbar_t *output, gpio_out_config_t *config, bool persistent)
 {
-    if(output->id == 1) {
+    if(output->id == 1) { //WHY THIS? NEED TO CHECK IF THIS IS BLOCKING INVERSION FOR MOST PINS
 
         if(config->inverted != aux_out[output->id].mode.inverted) {
             aux_out[output->id].mode.inverted = config->inverted;
@@ -300,12 +295,14 @@ static xbar_t *get_pin_info (io_port_direction_t dir, uint8_t port)
 
     if(dir == Port_Input && port < digital.in.n_ports) {
         memcpy(&pin, &aux_in[port], sizeof(xbar_t));
+        pin.pin += digital.in.n_start;
         pin.get_value = digital_in_state;
         pin.set_function = set_pin_function;
         pin.config = digital_in_cfg;
         info = &pin;
     } else if(dir == Port_Output && port < digital.out.n_ports) {
         memcpy(&pin, &aux_out[port], sizeof(xbar_t));
+        pin.pin += digital.out.n_start;
         pin.get_value = digital_out_state;
         pin.set_value = digital_out_ll;
         pin.set_function = set_pin_function;
@@ -336,30 +333,30 @@ static void get_aux_in_max (xbar_t *pin, void *fn)
 static void flexgpio_config (void *data)
 {
     uint8_t cmd[16];
-    // Split 32-bit mask into individual bytes
-    // cmd[0] = flexgpio_outpins & 0xFF;         // Least significant byte
-    // cmd[1] = (flexgpio_outpins >> 8) & 0xFF;  // Second byte
-    // cmd[2] = (flexgpio_outpins >> 16) & 0xFF; // Third byte
-    // cmd[3] = (flexgpio_outpins >> 24) & 0xFF; // Most significant byte
+    //VALUE
+    cmd[0] = 0x00;  // Least significant byte
+    cmd[1] = 0x00;  // Second byte
+    cmd[2] = 0x00;  // Third byte
+    cmd[3] = 0x00;  // Most significant byte
+    //DIRECTION
+    cmd[4] = 0x00;  // Least significant byte
+    cmd[5] = 0x00;  // Second byte
+    cmd[6] = 0x00;  // Third byte
+    cmd[7] = 0x00;  // Most significant byte
+    //POLARITY
+    cmd[8] = 0x00;  // Least significant byte
+    cmd[9] = 0x00;  // Second byte
+    cmd[10] = 0x00;  // Third byte
+    cmd[11] = 0x00;  // Most significant byte
+    //ENABLE
+    cmd[12] = 0xFF;  // Least significant byte
+    cmd[13] = 0xFF;  // Second byte
+    cmd[14] = 0xFF;  // Third byte
+    cmd[15] = 0xFF;  // Most significant byte
 
-    // cmd[4] = flexgpio_direction_mask & 0xFF;         // Least significant byte
-    // cmd[5] = (flexgpio_direction_mask >> 8) & 0xFF;  // Second byte
-    // cmd[6] = (flexgpio_direction_mask >> 16) & 0xFF; // Third byte
-    // cmd[7] = (flexgpio_direction_mask >> 24) & 0xFF; // Most significant byte
-    
-    // cmd[8] = flexgpio_polarity_mask & 0xFF;         // Least significant byte
-    // cmd[9] = (flexgpio_polarity_mask >> 8) & 0xFF;  // Second byte
-    // cmd[10] = (flexgpio_polarity_mask >> 16) & 0xFF; // Third byte
-    // cmd[11] = (flexgpio_polarity_mask >> 24) & 0xFF; // Most significant byte
-    
-    // cmd[12] = flexgpio_enable_mask & 0xFF;         // Least significant byte
-    // cmd[13] = (flexgpio_enable_mask >> 8) & 0xFF;  // Second byte
-    // cmd[14] = (flexgpio_enable_mask >> 16) & 0xFF; // Third byte
-    // cmd[15] = (flexgpio_enable_mask >> 24) & 0xFF; // Most significant byte
-
-    // while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
-    //     hal.delay_ms(1, NULL);
-    // }
+    while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
+        hal.delay_ms(1, NULL);
+    }
 }
 
 static void driverReset (void)
@@ -424,7 +421,7 @@ static void complete_setup (void *data)
 
 void flexgpio_init (void)
 {
-    uint_fast8_t idx, count = 0;
+    uint_fast8_t idx = 0;
     pin_function_t aux_in_base = Input_Aux0, aux_out_base = Output_Aux0;
 
     io_digital_t dports = {
@@ -446,14 +443,13 @@ void flexgpio_init (void)
         xbar_t *portinfo;
 
         if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_RisingFalling })))
-            ioport_enable_irq(expander_irq_port, portinfo->mode.inverted ? IRQ_Mode_Rising : IRQ_Mode_Falling, flexgpio_response)
+            ioport_enable_irq(expander_irq_port, portinfo->mode.inverted ? IRQ_Mode_Rising : IRQ_Mode_Falling, flexgpio_response);
         else
             task_run_on_startup(report_warning, "FlexGPIO plugin failed to claim port for MCU IRQ!");
-        }
 
     #endif // FLEXGPIO_IRQ_PIN
 
-    if(1) {//i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
+    if(i2c_start().ok && i2c_probe(FLEXGPIO_ADDRESS)) {
 
         driver_reset = hal.driver_reset;
         hal.driver_reset = driverReset;
@@ -477,21 +473,18 @@ void flexgpio_init (void)
             aux_in[idx].mode.input = On;
         }
 
-        digital.out.n_ports = max(FLEXGPIO_N_ACTIVE, N_AUX_DOUT_MAX - aux_out_base);
+        digital.out.n_ports = max(FLEXGPIO_N_DOUT, N_AUX_DOUT_MAX - aux_out_base);
 
-        for(idx = 0; idx < FLEXGPIO_N_DOUT; idx++) {
-            if(flexgpio_out_map[idx] == 1) {
-                aux_out[count].id = count;
-                aux_out[count].pin = idx;
-                aux_out[count].port = &d_out;
-                aux_out[count].function = aux_out_base + count;
-                aux_out[count].group = PinGroup_AuxOutput;
-                aux_out[count].cap.output = On;
-                aux_out[count].cap.external = On;
-                aux_out[count].cap.claimable = On;
-                aux_out[count].mode.output = On;
-                count++;
-            }
+        for(idx = 0; idx < digital.out.n_ports; idx++) {
+            aux_out[idx].id = idx;
+            aux_out[idx].pin = flexgpio_out_map[idx];
+            aux_out[idx].port = &d_out;
+            aux_out[idx].function = aux_out_base + idx;
+            aux_out[idx].group = PinGroup_AuxOutput;
+            aux_out[idx].cap.output = On;
+            aux_out[idx].cap.external = On;
+            aux_out[idx].cap.claimable = On;
+            aux_out[idx].mode.output = On;
         }
 
         ioports_add_digital(&dports);
