@@ -40,6 +40,21 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 #define FLEXGPIO_ADDRESS (0x48)
 #endif
 
+uint8_t flexgpio_in_map[] = {
+    5 // Motor_Fault_X
+    ,6 // AUXOUT_1
+    ,7 // AUXOUT_2
+#if N_ABC_MOTORS > 0
+    ,8  // DISABLE_A_N
+#endif
+#if N_ABC_MOTORS >= 2
+    ,9  // DISABLE_B_N
+#endif
+#if N_ABC_MOTORS == 3
+    ,10  // DISABLE_C_N
+#endif
+};
+
 uint8_t flexgpio_out_map[] = {
     23 // AUXOUT_0
     ,22 // AUXOUT_1
@@ -69,7 +84,7 @@ uint8_t flexgpio_out_map[] = {
 #endif
 };
 
-#define FLEXGPIO_N_DIN    0
+#define FLEXGPIO_N_DIN    4
 #define FLEXGPIO_N_DOUT  16//(sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
 
 static struct {
@@ -295,14 +310,14 @@ static xbar_t *get_pin_info (io_port_direction_t dir, uint8_t port)
 
     if(dir == Port_Input && port < digital.in.n_ports) {
         memcpy(&pin, &aux_in[port], sizeof(xbar_t));
-        pin.pin += digital.in.n_start;
+        //pin.pin += digital.in.n_start;
         pin.get_value = digital_in_state;
         pin.set_function = set_pin_function;
         pin.config = digital_in_cfg;
         info = &pin;
     } else if(dir == Port_Output && port < digital.out.n_ports) {
         memcpy(&pin, &aux_out[port], sizeof(xbar_t));
-        pin.pin += digital.out.n_start;
+        //pin.pin += digital.out.n_start;
         pin.get_value = digital_out_state;
         pin.set_value = digital_out_ll;
         pin.set_function = set_pin_function;
@@ -464,7 +479,7 @@ void flexgpio_init (void)
 
         for(idx = 0; idx < digital.in.n_ports; idx++) {
             aux_in[idx].id = idx;
-            aux_in[idx].pin = idx;
+            aux_in[idx].pin = flexgpio_in_map[idx];
             aux_in[idx].port = &d_in;
             aux_in[idx].function = aux_in_base + idx;
             aux_in[idx].group = PinGroup_AuxInput;
