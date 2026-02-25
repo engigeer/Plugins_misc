@@ -40,6 +40,8 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 #define FLEXGPIO_ADDRESS (0x48)
 #endif
 
+//TODO: consider if the below is redundant with board map and could be simplified
+
 uint8_t flexgpio_in_map[] = {
     5 // Motor_Fault_X
     ,6 // AUXOUT_1
