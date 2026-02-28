@@ -42,52 +42,54 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 
 //TODO: consider if the below is redundant with board map and could be simplified
 
-uint8_t flexgpio_in_map[] = {
-    5 // Motor_Fault_X
-    ,6 // AUXOUT_1
-    ,7 // AUXOUT_2
+static const uint8_t flexgpio_in_map[] = {
+    3,      // Probe
+    4,      // Tool
+    5,      // Motor_Fault_X
+    6,      // Motor_Fault_Y
+    7,      // Motor_Fault_Z
 #if N_ABC_MOTORS > 0
-    ,8  // DISABLE_A_N
+    8,      // Motor_Fault_A
 #endif
 #if N_ABC_MOTORS >= 2
-    ,9  // DISABLE_B_N
+    9,      // Motor_Fault_B
 #endif
 #if N_ABC_MOTORS == 3
-    ,10  // DISABLE_C_N
+    10      // Motor_Fault_C
 #endif
 };
 
-uint8_t flexgpio_out_map[] = {
-    23 // AUXOUT_0
-    ,22 // AUXOUT_1
-    ,21 // AUXOUT_2
-    ,20 // AUXOUT_3
-    ,19 // AUXOUT_4
-    ,18 // AUXOUT_5
-    ,17 // AUXOUT_6
-    ,16 // AUXOUT_7
+static const uint8_t flexgpio_out_map[] = {
+    23, // AUXOUT_0 (24V)
+    22, // AUXOUT_1 (24V)
+    21, // AUXOUT_2 (24V)
+    20, // AUXOUT_3 (24V)
+    19, // AUXOUT_4 (5V)
+    18, // AUXOUT_5 (5V)
+    17, // AUXOUT_6 (5V)
+    16, // AUXOUT_7 (5V)
 
-    ,11 // SPINDLE_EN
-    ,12 // SPINDLE_DIR
-    ,13 // MIST
-    ,14 // COOLANT
+    11, // SPINDLE_EN
+    12, // SPINDLE_DIR
+    13, // MIST
+    14, // COOLANT
 
-    ,29  // DISABLE_X_N
-    ,28  // DISABLE_Y_N
-    ,27  // DISABLE_Z_N
+    29, // DISABLE_X_N
+    28, // DISABLE_Y_N
+    27, // DISABLE_Z_N
 #if N_ABC_MOTORS > 0
-    ,26  // DISABLE_A_N
+    26, // DISABLE_A_N
 #endif
 #if N_ABC_MOTORS >= 2
-    ,25  // DISABLE_B_N
+    25, // DISABLE_B_N
 #endif
 #if N_ABC_MOTORS == 3
-    ,24  // DISABLE_C_N
+    24  // DISABLE_C_N
 #endif
 };
 
-#define FLEXGPIO_N_DIN    4
-#define FLEXGPIO_N_DOUT  16//(sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
+#define FLEXGPIO_N_DIN   (sizeof(flexgpio_in_map) / sizeof(flexgpio_in_map[0]))
+#define FLEXGPIO_N_DOUT  (sizeof(flexgpio_out_map) / sizeof(flexgpio_out_map[0]))
 
 static struct {
     pin_irq_mode_t mode;
@@ -477,7 +479,7 @@ void flexgpio_init (void)
         hal.enumerate_pins(false, get_aux_in_max, &aux_in_base);
         hal.enumerate_pins(false, get_aux_out_max, &aux_out_base);
 
-        digital.in.n_ports = max(FLEXGPIO_N_DIN, N_AUX_DIN_MAX - aux_in_base);
+        digital.in.n_ports = FLEXGPIO_N_DIN;
 
         for(idx = 0; idx < digital.in.n_ports; idx++) {
             aux_in[idx].id = idx;
@@ -493,7 +495,7 @@ void flexgpio_init (void)
             aux_in[idx].mode.input = On;
         }
 
-        digital.out.n_ports = max(FLEXGPIO_N_DOUT, N_AUX_DOUT_MAX - aux_out_base);
+        digital.out.n_ports = FLEXGPIO_N_DOUT;
 
         for(idx = 0; idx < digital.out.n_ports; idx++) {
             aux_out[idx].id = idx;
