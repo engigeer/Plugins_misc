@@ -100,8 +100,7 @@ static xbar_t aux_in[FLEXGPIO_N_DIN] = {};
 static xbar_t aux_out[FLEXGPIO_N_DOUT] = {};
 static io_ports_data_t digital;
 static uint32_t d_out = 0, d_in = 0;
-static bool reset_pending = false; //NEED TO IMPLEMENT PROPERLY
-static volatile uint32_t event_bits = 0; //NEED TO IMPLEMENT PROPERLY
+static volatile uint32_t event_bits = 0; // TODO: test implmentation
 
 static driver_reset_ptr driver_reset;
 static enumerate_pins_ptr on_enumerate_pins;
@@ -332,9 +331,65 @@ static xbar_t *get_pin_info (io_port_direction_t dir, uint8_t port)
     return info;
 }
 
+static void i2c_get_inputs (void *data)
+{
+    uint32_t pins;
+
+    uint8_t cmd[4] = {0}; // Use 4 bytes to match 32-bit uint32_t
+   
+    i2c_receive(FLEXGPIO_ADDRESS, cmd, 4, true);
+    
+    // Convert received bytes to 32-bit value
+    pins = ((uint32_t)cmd[3] << 24) | ((uint32_t)cmd[2] << 16) | ((uint32_t)cmd[1] << 8) | (uint32_t)cmd[0];
+
+    for (uint_fast8_t idx = 0; idx < digital.in.n_ports; idx ++) {
+
+        xbar_t *input = &aux_in[idx];
+    
+        if(input->port) {
+
+            uint32_t bit = 1UL << flexgpio_in_map[idx];
+            uint32_t *port = (uint32_t *)input->port;
+
+            bool state = (pins & bit)  != 0;
+            bool prev  = (*port & bit) != 0;
+            bool event = false;
+
+            switch(irq[input->id].mode) {
+
+                case IRQ_Mode_Rising:
+                    event = state && !prev;
+                    break;
+
+                case IRQ_Mode_Falling:
+                    event = !state && prev;
+                    break;
+
+                case IRQ_Mode_Change:
+                    event = state != prev;
+                    break;
+
+                default: break;
+            }
+
+            if(state)
+                *port |= bit;
+            else
+                *port &= ~bit;
+
+            if(event) {
+                if(irq[input->id].callback)
+                    irq[input->id].callback(digital.in.n_start + input->id, state);
+
+                event_bits |= bit;
+            }
+        }
+    }
+}
+
 ISR_CODE static void ISR_FUNC(flexgpio_response)(uint8_t port, bool state)
 {
-    // request info from expander and react accordingly
+    task_add_immediate(i2c_get_inputs, NULL);
 }
 
 static void get_aux_out_max (xbar_t *pin, void *fn)
@@ -383,10 +438,7 @@ static void driverReset (void)
 {
     driver_reset();
 
-    if(reset_pending)
-    	task_add_immediate(flexgpio_config, NULL);
 }
-
 
 static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
 {
@@ -464,8 +516,8 @@ void flexgpio_init (void)
         io_port_cfg_t mcu_d_in;
         xbar_t *portinfo;
 
-        if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_RisingFalling })))
-            ioport_enable_irq(expander_irq_port, portinfo->mode.inverted ? IRQ_Mode_Rising : IRQ_Mode_Falling, flexgpio_response);
+        if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_Rising})))
+            ioport_enable_irq(expander_irq_port, IRQ_Mode_Rising, flexgpio_response);
         else
             task_run_on_startup(report_warning, "FlexGPIO plugin failed to claim port for MCU IRQ!");
 
