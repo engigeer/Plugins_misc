@@ -5,6 +5,8 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
   Part of grblHAL
 
   Copyright (c) 2018-2026 Terje Io
+  Copyright (c) 2025 Expatria Technologies Inc.
+  Copyright (c) 2026 Mitchell Grams
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -23,7 +25,6 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 
 // TODO: 
 //- (1) ADD WRITING FOR CONFIGURATION (INVERT, DIRECTION, MASK, ETC.)
-//- (2) CLAIM INPUT TO USE FOR TRIGGERING IRQ FOR ALARM PINS
 
 #include "driver.h"
 
@@ -131,8 +132,9 @@ static void digital_out_ll (xbar_t *output, float value)
         cmd[2] = (last_out >> 16) & 0xFF; // Third byte
         cmd[3] = (last_out >> 24) & 0xFF; // Most significant byte
 
-        while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, false))
-            hal.delay_ms(1, NULL);
+        if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 4, true)){
+            system_raise_alarm(Alarm_ExpanderException);
+        }
     }
 }
 
@@ -337,8 +339,10 @@ static void i2c_get_inputs (void *data)
 
     uint8_t cmd[4] = {0}; // Use 4 bytes to match 32-bit uint32_t
    
-    i2c_receive(FLEXGPIO_ADDRESS, cmd, 4, true);
-    
+    if (!i2c_receive(FLEXGPIO_ADDRESS, cmd, 4, true)){
+        system_raise_alarm(Alarm_ExpanderException);
+        return;
+    }
     // Convert received bytes to 32-bit value
     pins = ((uint32_t)cmd[3] << 24) | ((uint32_t)cmd[2] << 16) | ((uint32_t)cmd[1] << 8) | (uint32_t)cmd[0];
 
@@ -349,37 +353,36 @@ static void i2c_get_inputs (void *data)
         if(input->port) {
 
             uint32_t bit = 1UL << flexgpio_in_map[idx];
-            uint32_t *port = (uint32_t *)input->port;
 
-            bool state = (pins & bit)  != 0;
-            bool prev  = (*port & bit) != 0;
+            //bool state = (pins & bit)  != 0;
+            //bool prev  = (*(uint32_t *)input->port & bit) != 0;
             bool event = false;
 
             switch(irq[input->id].mode) {
 
                 case IRQ_Mode_Rising:
-                    event = state && !prev;
+                    event = ((pins & bit)!= 0) && !((*(uint32_t *)input->port & bit)!= 0);
                     break;
 
                 case IRQ_Mode_Falling:
-                    event = !state && prev;
+                    event = !((pins & bit)!= 0) && ((*(uint32_t *)input->port & bit)!= 0);
                     break;
 
                 case IRQ_Mode_Change:
-                    event = state != prev;
+                    event = ((pins & bit)!= 0) != ((*(uint32_t *)input->port & bit)!= 0);
                     break;
 
                 default: break;
             }
 
-            if(state)
-                *port |= bit;
+            if((pins & bit) != 0)
+                *(uint32_t *)input->port |= bit;
             else
-                *port &= ~bit;
+                *(uint32_t *)input->port &= ~bit;
 
             if(event) {
                 if(irq[input->id].callback)
-                    irq[input->id].callback(digital.in.n_start + input->id, state);
+                    irq[input->id].callback(digital.in.n_start + input->id, ((pins & bit) != 0));
 
                 event_bits |= bit;
             }
@@ -423,21 +426,25 @@ static void flexgpio_config (void *data)
     cmd[9] = 0x00;   // Second byte
     cmd[10] = 0x00;  // Third byte
     cmd[11] = 0x00;  // Most significant byte
-    //ENABLE
+    //ENABLE (TODO: ignore pins that are not configured . . .)
     cmd[12] = 0xFF;  // Least significant byte
     cmd[13] = 0xFF;  // Second byte
     cmd[14] = 0xFF;  // Third byte
     cmd[15] = 0xFF;  // Most significant byte
 
-    while (!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, 1)){
-        hal.delay_ms(1, NULL);
+    // send configuration info
+    if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, true)){
+        system_raise_alarm(Alarm_ExpanderException);
     }
+
+    // update input states
+    task_add_immediate(i2c_get_inputs, NULL);
 }
 
 static void driverReset (void)
 {
+    // todo: deterministic pin states (what happens if there was disconnect?)
     driver_reset();
-
 }
 
 static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
@@ -516,8 +523,8 @@ void flexgpio_init (void)
         io_port_cfg_t mcu_d_in;
         xbar_t *portinfo;
 
-        if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_Rising})))
-            ioport_enable_irq(expander_irq_port, IRQ_Mode_Rising, flexgpio_response);
+        if(ioports_cfg(&mcu_d_in, Port_Digital, Port_Input) && (portinfo = mcu_d_in.claim(&mcu_d_in, &expander_irq_port, "FlexGPIO MCU IRQ", (pin_cap_t){ .irq_mode = IRQ_Mode_Change})))
+            ioport_enable_irq(expander_irq_port, IRQ_Mode_Change, flexgpio_response);
         else
             task_run_on_startup(report_warning, "FlexGPIO plugin failed to claim port for MCU IRQ!");
 
@@ -544,6 +551,7 @@ void flexgpio_init (void)
             aux_in[idx].cap.pull_mode = PullMode_UpDown;
             aux_in[idx].cap.external = On;
             aux_in[idx].cap.claimable = On;
+            aux_in[idx].cap.invert = On;
             aux_in[idx].mode.input = On;
         }
 
@@ -558,6 +566,7 @@ void flexgpio_init (void)
             aux_out[idx].cap.output = On;
             aux_out[idx].cap.external = On;
             aux_out[idx].cap.claimable = On;
+            aux_out[idx].cap.invert = On;
             aux_out[idx].mode.output = On;
         }
 
