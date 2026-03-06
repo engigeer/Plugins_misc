@@ -101,7 +101,7 @@ static xbar_t aux_in[FLEXGPIO_N_DIN] = {};
 static xbar_t aux_out[FLEXGPIO_N_DOUT] = {};
 static io_ports_data_t digital;
 static uint32_t d_out = 0, d_in = 0;
-static volatile uint32_t event_bits = 0; // TODO: test implmentation
+static volatile uint32_t event_bits = 0;
 
 static driver_reset_ptr driver_reset;
 static enumerate_pins_ptr on_enumerate_pins;
@@ -178,14 +178,9 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
         if(!xbar_is_probe_in(input->function))
             aux_in[input->id].mode.inverted = config->inverted;
 
-        if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
-
-            //char buf[40];
-
-            //aux_in[input->id].mode.pull_mode = config->pull_mode;
-            //sprintf(buf, "[EXP:io.%d=in,high,%s]\n", input->pin, config->pull_mode == PullMode_Down ? "pd" : "pu");
-            //expander.write(buf);
-        }
+        // if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
+        //
+        // }
 
         if(persistent)
             ioport_save_input_settings(input, config);
@@ -353,9 +348,6 @@ static void i2c_get_inputs (void *data)
         if(input->port) {
 
             uint32_t bit = 1UL << flexgpio_in_map[idx];
-
-            //bool state = (pins & bit)  != 0;
-            //bool prev  = (*(uint32_t *)input->port & bit) != 0;
             bool event = false;
 
             switch(irq[input->id].mode) {
@@ -416,12 +408,12 @@ static void flexgpio_config (void *data)
     cmd[1] = 0x00;  // Second byte
     cmd[2] = 0x00;  // Third byte
     cmd[3] = 0x00;  // Most significant byte
-    //DIRECTION
+    //DIRECTION (NOT USED)
     cmd[4] = 0x00;  // Least significant byte
     cmd[5] = 0x00;  // Second byte
     cmd[6] = 0x00;  // Third byte
     cmd[7] = 0x00;  // Most significant byte
-    //POLARITY
+    //POLARITY (NOT USED)
     cmd[8] = 0x00;   // Least significant byte
     cmd[9] = 0x00;   // Second byte
     cmd[10] = 0x00;  // Third byte
@@ -468,8 +460,6 @@ static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
     for(idx = 0; idx < digital.out.n_ports; idx ++) {
 
         memcpy(&pin, &aux_out[idx], sizeof(xbar_t));
-
-        //pin.pin += 8; WHAT IS THIS DOING FOR THE FNC PLUGIN?
 
         if(!low_level)
             pin.port = "FLEXGPIO:";
@@ -548,7 +538,7 @@ void flexgpio_init (void)
             aux_in[idx].group = PinGroup_AuxInput;
             aux_in[idx].cap.input = On;
             aux_in[idx].cap.irq_mode = IRQ_Mode_Edges;
-            aux_in[idx].cap.pull_mode = PullMode_UpDown;
+            aux_in[idx].cap.pull_mode = PullMode_Up;
             aux_in[idx].cap.external = On;
             aux_in[idx].cap.claimable = On;
             aux_in[idx].cap.invert = On;
