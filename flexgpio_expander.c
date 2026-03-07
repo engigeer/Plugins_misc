@@ -165,7 +165,7 @@ static float digital_out_state (xbar_t *output)
     float value = -1.0f;
 
     if(output->id < digital.out.n_ports)
-        value = (float)(!!(*(uint16_t *)output->port & (1 << output->pin)));
+        value = (float)(!!(*(uint32_t *)output->port & (1 << output->pin)));
 
     return value;
 }
@@ -175,8 +175,8 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
 {
     if(input->id < digital.in.n_ports && config->pull_mode != PullMode_UpDown) {
 
-        if(!xbar_is_probe_in(input->function))
-            aux_in[input->id].mode.inverted = config->inverted;
+        // if(!xbar_is_probe_in(input->function))
+        //     aux_in[input->id].mode.inverted = config->inverted;
 
         // if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
         //
