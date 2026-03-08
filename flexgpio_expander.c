@@ -44,8 +44,8 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 //TODO: consider if the below is redundant with board map and could be simplified
 
 static const uint8_t flexgpio_in_map[] = {
-    3,      // Probe
-    4,      // Tool
+    3,      // Tool
+    4,      // Probe
     5,      // Motor_Fault_X
     6,      // Motor_Fault_Y
     7,      // Motor_Fault_Z
