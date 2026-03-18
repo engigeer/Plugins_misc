@@ -175,8 +175,8 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
 {
     if(input->id < digital.in.n_ports && config->pull_mode != PullMode_UpDown) {
 
-        // if(!xbar_is_probe_in(input->function))
-        //     aux_in[input->id].mode.inverted = config->inverted;
+        if(!xbar_is_probe_in(input->function) && !xbar_is_motor_fault_in(input->function))
+            aux_in[input->id].mode.inverted = config->inverted;
 
         // if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
         //
