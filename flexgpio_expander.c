@@ -170,7 +170,6 @@ static float digital_out_state (xbar_t *output)
     return value;
 }
 
-
 static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persistent)
 {
     if(input->id < digital.in.n_ports && config->pull_mode != PullMode_UpDown) {
@@ -178,10 +177,11 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
         if(!xbar_is_probe_in(input->function) && !xbar_is_motor_fault_in(input->function))
             aux_in[input->id].mode.inverted = config->inverted;
 
-        // if(aux_in[input->id].mode.pull_mode != config->pull_mode) {
-        //
-        // }
-
+        if(xbar_is_probe_in(input->function)){
+            if(config->debounce)
+                //flag to link to irq in expander
+        }
+        
         if(persistent)
             ioport_save_input_settings(input, config);
     }
