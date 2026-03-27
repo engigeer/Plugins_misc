@@ -45,7 +45,7 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 
 static const uint8_t flexgpio_in_map[] = {
     3,      // Tool
-    4,      // Probe
+    //4,      // Probe
     5,      // Motor_Fault_X
     6,      // Motor_Fault_Y
     7,      // Motor_Fault_Z
@@ -178,7 +178,7 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
             aux_in[input->id].mode.inverted = config->inverted;
 
         if(xbar_is_probe_in(input->function)){
-            if(config->debounce)
+            //if(config->debounce)
                 //flag to link to irq in expander
         }
         
@@ -401,31 +401,22 @@ static void get_aux_in_max (xbar_t *pin, void *fn)
 
 static void flexgpio_config (void *data)
 {
-    // TODO : remove unncessary info
-    uint8_t cmd[16];
+    uint8_t cmd[8];
     //VALUE
     cmd[0] = 0x00;  // Least significant byte
     cmd[1] = 0x00;  // Second byte
     cmd[2] = 0x00;  // Third byte
     cmd[3] = 0x00;  // Most significant byte
-    //DIRECTION (NOT USED)
-    cmd[4] = 0x00;  // Least significant byte
-    cmd[5] = 0x00;  // Second byte
-    cmd[6] = 0x00;  // Third byte
+    //MCU_IRQ_MASK
+    cmd[4] = 0xFF;  // Least significant byte
+    cmd[5] = 0xFF;  // Second byte
+    //PROBE_IRQ_MASK
+    cmd[6] = 1 << 4; //;0x00;  // Third byte //TEMPORARY HARD CODE OF PROBE IRQ_MASK FOR PROBE_PIN
     cmd[7] = 0x00;  // Most significant byte
     //POLARITY (NOT USED)
-    cmd[8] = 0x00;   // Least significant byte
-    cmd[9] = 0x00;   // Second byte
-    cmd[10] = 0x00;  // Third byte
-    cmd[11] = 0x00;  // Most significant byte
-    //ENABLE (TODO: ignore pins that are not configured . . .)
-    cmd[12] = 0xFF;  // Least significant byte
-    cmd[13] = 0xFF;  // Second byte
-    cmd[14] = 0xFF;  // Third byte
-    cmd[15] = 0xFF;  // Most significant byte
 
     // send configuration info
-    if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 16, true)){
+    if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 8, true)){
         system_raise_alarm(Alarm_ExpanderException);
     }
 
@@ -473,7 +464,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        report_plugin("FLEXGPIO", "0.02");
+        report_plugin("FLEXGPIO", "0.03");
 }
 
 static void complete_setup (void *data)
