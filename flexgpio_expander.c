@@ -413,7 +413,6 @@ static void flexgpio_config (void *data)
     //PROBE_IRQ_MASK
     cmd[6] = 1 << 4; //;0x00;  // Third byte //TEMPORARY HARD CODE OF PROBE IRQ_MASK FOR PROBE_PIN
     cmd[7] = 0x00;  // Most significant byte
-    //POLARITY (NOT USED)
 
     // send configuration info
     if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 8, true)){
@@ -428,6 +427,8 @@ static void driverReset (void)
 {
     // todo: deterministic pin states (what happens if there was disconnect?)
     driver_reset();
+
+    //task_add_immediate(flexgpio_config, NULL);
 }
 
 static void onEnumeratePins (bool low_level, pin_info_ptr pin_info, void *data)
