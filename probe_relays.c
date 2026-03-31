@@ -1,12 +1,10 @@
 /*
 
-  probe_relays.c - controls relay(s) for switching between probes using a single probe input
-
-  Use G65P5Q<n> to select probe where <n> = 0 is for direct input, <n> = 1 is for toolsetter and <n> = 2 is for second spindle probe.
-
+  probe_relays.c - modified for expander probe multiplexing
   Part of grblHAL
 
   Copyright (c) 2024-2025 Terje Io
+  Copyright (c) 2026 Mitchell Grams
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,28 +31,48 @@
 #include "grbl/pin_bits_masks.h"
 
 static on_report_options_ptr on_report_options;
-static probe_select_ptr hal_probe_select;
+static probe_select_ptr probe_select;
+static probe_configure_ptr probe_configure;
 
 xbar_t *probe_pins[2];
+probe_id_t active_probe = Probe_Default;
+
+aux_ctrl_t probe_pin = { .function = Input_Probe, .port = IOPORT_UNASSIGNED, .gpio.pin = 4 };
+aux_ctrl_t toolsetter_pin = { .function = Input_Toolsetter, .port = IOPORT_UNASSIGNED, .gpio.pin = 3 };
 
 bool onProbeSelect (probe_id_t probe_id)
 {
-    bool ok;
+    bool ok = false;
 
     switch(probe_id) {
 
-            case Probe_Default:
-                probe_pin[0]->config(); // somehow communicate this back to expander
+        case Probe_Default:
+                //probe_pin[0]->config(); // somehow communicate this back to expander
+                ok = true;
+                active_probe = probe_id;
+                hal.probe.configure(false, false);
             break;    
 
         case Probe_Toolsetter:
-                probe_pin[1]->config();//toolsetter_pin.pin = true; // somehow communicate this back to expander
+                //probe_pin[1]->config();//toolsetter_pin.pin = true; // somehow communicate this back to expander
+                ok = true;
+                active_probe = probe_id;
+                hal.probe.configure(false, false);
             break;
 
         default: break;
     }
 
     return ok;
+}
+
+static void probeConfigure (bool is_probe_away, bool probing)
+{
+    if (active_probe == Probe_Toolsetter) {
+        if (settings.probe.invert_toolsetter_input != settings.probe.invert_probe_pin)
+            is_probe_away = !is_probe_away;
+    }
+    probe_configure(is_probe_away, probing);
 }
 
 static void onReportOptions (bool newopt)
@@ -64,9 +82,6 @@ static void onReportOptions (bool newopt)
     if(!newopt)
         report_plugin("Probe select expander", "0.01");
 }
-
-aux_ctrl_t probe_pin = { .function = Input_Probe, .port = IOPORT_UNASSIGNED, .gpio.pin = 4 };
-aux_ctrl_t toolsetter_pin = { .function = Input_Toolsetter, .port = IOPORT_UNASSIGNED, .gpio.pin = 3 };
 
 void probe_select_init (void)
 {
@@ -86,8 +101,12 @@ void probe_select_init (void)
         ok = false;
     
     if(ok && (hal.driver_cap.toolsetter = On)) {
-        hal_probe_select = hal.probe.select;
+        probe_select = hal.probe.select;
         hal.probe.select = onProbeSelect;
+
+        probe_configure = hal.probe.configure;
+        hal.probe.configure = probeConfigure;
+
     } else
         task_run_on_startup(report_warning, "Probe expander plugin: error claiming required ports.");
 
