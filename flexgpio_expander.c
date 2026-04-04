@@ -45,7 +45,7 @@ flexgpio_expander.c - driver code for FLEXGPIO I2C expander
 
 static const uint8_t flexgpio_in_map[] = {
     3,      // Tool
-    //4,      // Probe
+    4,      // Probe
     5,      // Motor_Fault_X
     6,      // Motor_Fault_Y
     7,      // Motor_Fault_Z
@@ -107,9 +107,14 @@ static driver_reset_ptr driver_reset;
 static enumerate_pins_ptr on_enumerate_pins;
 static on_report_options_ptr on_report_options;
 
+static uint32_t last_out = 0;
+static uint16_t probe_irq_mask = 0;
+static uint16_t mcu_irq_mask = 0;
+
+static void flexgpio_config (void *data);
+
 static void digital_out_ll (xbar_t *output, float value)
 {
-    static uint32_t last_out = 0;
 
     bool on = value !=0.0f;
 
@@ -178,8 +183,14 @@ static bool digital_in_cfg (xbar_t *input, gpio_in_config_t *config, bool persis
             aux_in[input->id].mode.inverted = config->inverted;
 
         if(xbar_is_probe_in(input->function)){
-            //if(config->debounce)
-                //flag to link to irq in expander
+            mcu_irq_mask &= ~(1 << input->pin); // Clear MCU IRQ bit
+
+            if(config->debounce)
+                probe_irq_mask |= 1 << input->pin;
+            else
+                probe_irq_mask &= ~(1 << input->pin);
+
+            task_add_immediate(flexgpio_config, NULL);
         }
         
         if(persistent)
@@ -402,17 +413,17 @@ static void get_aux_in_max (xbar_t *pin, void *fn)
 static void flexgpio_config (void *data)
 {
     uint8_t cmd[8];
-    //VALUE
-    cmd[0] = 0x00;  // Least significant byte
-    cmd[1] = 0x00;  // Second byte
-    cmd[2] = 0x00;  // Third byte
-    cmd[3] = 0x00;  // Most significant byte
+    //OUTPUT VALUES
+    cmd[0] = last_out & 0xFF;               // Least significant byte
+    cmd[1] = (last_out >> 8) & 0xFF;        // Second byte
+    cmd[2] = (last_out >> 16) & 0xFF;       // Third byte
+    cmd[3] = (last_out >> 24) & 0xFF;       // Most significant byte
     //MCU_IRQ_MASK
-    cmd[4] = 0xFF;  // Least significant byte
-    cmd[5] = 0xFF;  // Second byte
+    cmd[4] = mcu_irq_mask & 0xFF;           // Least significant byte
+    cmd[5] = (mcu_irq_mask >> 8) & 0xFF;    // Most significant byte
     //PROBE_IRQ_MASK
-    cmd[6] = 1 << 4; //;0x00;  // Third byte //TEMPORARY HARD CODE OF PROBE IRQ_MASK FOR PROBE_PIN
-    cmd[7] = 0x00;  // Most significant byte
+    cmd[6] = probe_irq_mask & 0xFF;         // Least significant byte
+    cmd[7] = (probe_irq_mask >> 8) & 0xFF;  // Most significant byte
 
     // send configuration info
     if(!i2c_send(FLEXGPIO_ADDRESS, cmd, 8, true)){
@@ -470,6 +481,8 @@ static void onReportOptions (bool newopt)
 
 static void complete_setup (void *data)
 {
+    uint_fast8_t idx = 0;
+
     on_enumerate_pins = hal.enumerate_pins;
     hal.enumerate_pins = onEnumeratePins;
 
@@ -478,6 +491,9 @@ static void complete_setup (void *data)
 
     driver_reset = hal.driver_reset;
     hal.driver_reset = driverReset;
+
+    for(idx = 0; idx < digital.in.n_ports; idx++)
+        mcu_irq_mask |= 1 << flexgpio_in_map[idx];
 
     task_add_immediate(flexgpio_config, NULL);
 }

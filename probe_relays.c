@@ -34,43 +34,51 @@ static on_report_options_ptr on_report_options;
 static probe_select_ptr probe_select;
 static probe_configure_ptr probe_configure;
 
-xbar_t *probe_pins[2];
+xbar_t probe_pins[2];
 probe_id_t active_probe = Probe_Default;
 
+// TODO: add code guards and assign pins based on board map instead of hardcoding?
 aux_ctrl_t probe_pin = { .function = Input_Probe, .port = IOPORT_UNASSIGNED, .gpio.pin = 4 };
 aux_ctrl_t toolsetter_pin = { .function = Input_Toolsetter, .port = IOPORT_UNASSIGNED, .gpio.pin = 3 };
 
+// NEED TO SELECT DEFAULT PROBE ON STARTUP?
 bool onProbeSelect (probe_id_t probe_id)
 {
-    bool ok = false;
+    gpio_in_config_t config0 = {0};
+    gpio_in_config_t config1 = {0};
 
     switch(probe_id) {
 
         case Probe_Default:
-                //probe_pin[0]->config(); // somehow communicate this back to expander
-                ok = true;
-                active_probe = probe_id;
-                hal.probe.configure(false, false);
+                config0.debounce = On;
+                config1.debounce = Off;
             break;    
 
         case Probe_Toolsetter:
-                //probe_pin[1]->config();//toolsetter_pin.pin = true; // somehow communicate this back to expander
-                ok = true;
-                active_probe = probe_id;
-                hal.probe.configure(false, false);
+                config0.debounce = Off;
+                config1.debounce = On;
             break;
 
-        default: break;
+        default:
+            return false;
     }
 
-    return ok;
+    active_probe = probe_id;
+    hal.probe.configure(false, false);
+
+    if(probe_pins[0].config)
+        probe_pins[0].config(&probe_pins[0], &config0, false);
+    if(probe_pins[1].config)
+        probe_pins[1].config(&probe_pins[1], &config1, false);
+
+    return true;
 }
 
 static void probeConfigure (bool is_probe_away, bool probing)
 {
     if (active_probe == Probe_Toolsetter) {
         if (settings.probe.invert_toolsetter_input != settings.probe.invert_probe_pin)
-            is_probe_away = !is_probe_away;
+            is_probe_away = !is_probe_away; // invert here only if toolsetter invert setting is different from probe invert setting
     }
     probe_configure(is_probe_away, probing);
 }
@@ -88,16 +96,22 @@ void probe_select_init (void)
     bool ok = true;
     xbar_t *pin;
 
-    if((ioports_enumerate(Port_Digital, Port_Input, (pin_cap_t){.external = On, .claimable = On }, __find_in_ext, &probe_pin))
-            && (probe_pins[0] = aux_ctrl_claim_port(&probe_pin)))
-        ioport_set_description(Port_Digital, Port_Input, probe_pin.port, "expander multiplex");
-    else 
+    if(ioports_enumerate(Port_Digital, Port_Input, (pin_cap_t){.external = On, .claimable = On }, __find_in_ext, &probe_pin)){
+        if(pin = ioport_claim(Port_Digital, Port_Input, &probe_pin.port, NULL)) {
+            ioport_set_description(Port_Digital, Port_Input, probe_pin.port, "expander multiplex");
+            ioport_set_function(pin, probe_pin.function, NULL);
+            probe_pins[0] = *pin;
+        }
+    } else 
         ok = false;
 
-    if((ioports_enumerate(Port_Digital, Port_Input, (pin_cap_t){.external = On, .claimable = On }, __find_in_ext, &toolsetter_pin))
-            && (probe_pins[1] = aux_ctrl_claim_port(&toolsetter_pin)))
-        ioport_set_description(Port_Digital, Port_Input, toolsetter_pin.port, "expander multiplex");
-    else 
+    if(ioports_enumerate(Port_Digital, Port_Input, (pin_cap_t){.external = On, .claimable = On }, __find_in_ext, &toolsetter_pin)){
+        if(pin = ioport_claim(Port_Digital, Port_Input, &toolsetter_pin.port, NULL)) {
+            ioport_set_description(Port_Digital, Port_Input, toolsetter_pin.port, "expander multiplex");
+            ioport_set_function(pin, toolsetter_pin.function, NULL);
+            probe_pins[1] = *pin;
+        }
+    } else 
         ok = false;
     
     if(ok && (hal.driver_cap.toolsetter = On)) {
